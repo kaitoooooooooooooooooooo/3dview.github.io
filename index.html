@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Viewer</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: transparent !important; width: 100%; height: 100%; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; font-family: 'Outfit', sans-serif; min-height: 100vh; padding: 16px; }
+
+  .viewer-wrap { position: relative; width: 420px; height: 420px; border-radius: 24px; overflow: hidden; }
+
+  .glass-bg {
+    position: absolute; inset: 0; border-radius: 24px;
+    background: rgba(255,255,255,0.88);
+    border: 1.5px solid rgba(0,0,0,0.10);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 4px 32px rgba(0,0,0,0.08);
+    z-index: 0; transition: opacity 0.5s ease;
+  }
+  .viewer-wrap.has-model .glass-bg { opacity: 0; pointer-events: none; }
+
+  #three-canvas {
+    position: absolute; inset: 0;
+    width: 100% !important; height: 100% !important;
+    border-radius: 24px; z-index: 1; cursor: grab;
+  }
+  #three-canvas:active { cursor: grabbing; }
+
+  /* Upload zone */
+  .upload-zone {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    border-radius: 24px; transition: opacity 0.4s;
+  }
+  .upload-zone.hidden { opacity: 0; pointer-events: none; }
+  .upload-icon {
+    width: 60px; height: 60px; border-radius: 18px;
+    background: rgba(0,0,0,0.06); border: 1.5px solid rgba(0,0,0,0.10);
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(0,0,0,0.45); transition: background 0.2s, transform 0.2s;
+  }
+  .upload-zone:hover .upload-icon { background: rgba(0,0,0,0.10); transform: scale(1.05); }
+  .upload-icon svg { width: 24px; height: 24px; }
+  .upload-title { font-size: 15px; font-weight: 700; color: rgba(0,0,0,0.75); }
+  .upload-sub { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(0,0,0,0.35); text-transform: uppercase; letter-spacing: 0.14em; }
+  .upload-btn {
+    margin-top: 2px; padding: 10px 26px;
+    background: rgba(0,0,0,0.07); border: 1.5px solid rgba(0,0,0,0.12);
+    border-radius: 99px; color: rgba(0,0,0,0.70);
+    font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .upload-btn:hover { background: rgba(0,0,0,0.12); border-color: rgba(0,0,0,0.22); transform: translateY(-1px); }
+  #file-input { display: none; }
+
+  /* Settings button */
+  .settings-btn {
+    position: absolute; top: 14px; right: 14px; z-index: 30;
+    width: 32px; height: 32px;
+    background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: rgba(255,255,255,0.7); backdrop-filter: blur(8px);
+    opacity: 0; pointer-events: none; transition: opacity 0.25s, background 0.2s;
+  }
+  .settings-btn svg { width: 15px; height: 15px; }
+  .settings-btn:hover { background: rgba(255,255,255,0.22); color: #fff; }
+  .viewer-wrap.has-model:hover .settings-btn { opacity: 1; pointer-events: auto; }
+  .viewer-wrap:not(.has-model) .settings-btn { display: none; }
+
+  /* Settings panel */
+  .settings-panel {
+    position: absolute; top: 52px; right: 14px; z-index: 35;
+    background: rgba(18,18,26,0.96); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 14px; padding: 14px;
+    display: flex; flex-direction: column; gap: 10px;
+    backdrop-filter: blur(16px); min-width: 200px;
+    opacity: 0; pointer-events: none;
+    transform: translateY(-6px) scale(0.97);
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .settings-panel.open { opacity: 1; pointer-events: auto; transform: none; }
+
+  .panel-label {
+    font-family: 'DM Mono', monospace; font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.14em; color: rgba(255,255,255,0.3);
+  }
+  .ctrl-row { display: flex; gap: 6px; }
+  .ctrl-btn {
+    flex: 1; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; padding: 6px 4px; color: rgba(255,255,255,0.6);
+    font-family: 'DM Mono', monospace; font-size: 9px; cursor: pointer; transition: all 0.2s;
+    text-align: center; text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .ctrl-btn:hover { background: rgba(255,255,255,0.14); color: #fff; }
+  .ctrl-btn.active { background: rgba(160,120,255,0.25); border-color: rgba(160,120,255,0.45); color: #d0b8ff; }
+  .panel-divider { height: 1px; background: rgba(255,255,255,0.08); }
+
+  .panel-action {
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px; padding: 7px 10px; color: rgba(255,255,255,0.6);
+    font-family: 'DM Mono', monospace; font-size: 9px; cursor: pointer;
+    text-transform: uppercase; letter-spacing: 0.1em; transition: all 0.2s; text-align: center;
+  }
+  .panel-action:hover { background: rgba(255,255,255,0.12); color: #fff; }
+
+  /* Color pickers row */
+  .color-row {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .color-item { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
+  .color-item label { font-family: 'DM Mono', monospace; font-size: 8px; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.1em; }
+  .color-item input[type="color"] {
+    width: 100%; height: 28px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15);
+    background: none; cursor: pointer; padding: 2px 3px;
+  }
+
+  /* Loader */
+  .loader {
+    position: absolute; inset: 0; z-index: 20;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    border-radius: 24px; opacity: 0; pointer-events: none; transition: opacity 0.3s;
+  }
+  .loader.show { opacity: 1; }
+  .spinner {
+    width: 34px; height: 34px;
+    border: 2px solid rgba(0,0,0,0.08); border-top-color: rgba(100,80,200,0.7);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loader-text { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(0,0,0,0.35); letter-spacing: 0.1em; text-transform: uppercase; }
+
+  /* Storage notice */
+  .storage-notice {
+    position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+    z-index: 25; background: rgba(18,18,26,0.85); border: 1px solid rgba(160,120,255,0.3);
+    border-radius: 99px; padding: 5px 14px;
+    font-family: 'DM Mono', monospace; font-size: 9px; color: rgba(160,120,255,0.9);
+    letter-spacing: 0.1em; white-space: nowrap;
+    opacity: 0; transition: opacity 0.4s; pointer-events: none;
+  }
+  .storage-notice.show { opacity: 1; }
+
+  .viewer-wrap.drag-over .glass-bg { background: rgba(210,200,255,0.92); border-color: rgba(120,90,220,0.35); }
+</style>
+</head>
+<body>
+
+<div class="viewer-wrap" id="viewer-wrap">
+  <div class="glass-bg"></div>
+  <canvas id="three-canvas"></canvas>
+
+  <!-- Upload zone -->
+  <div class="upload-zone" id="upload-zone">
+    <div class="upload-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+    </div>
+    <div class="upload-title">Charger un modèle 3D</div>
+    <div class="upload-sub">.glb · .gltf · .obj</div>
+    <button class="upload-btn" onclick="document.getElementById('file-input').click()">Choisir un fichier</button>
+  </div>
+
+  <!-- Loader -->
+  <div class="loader" id="loader">
+    <div class="spinner"></div>
+    <div class="loader-text">Chargement…</div>
+  </div>
+
+  <!-- Storage notice -->
+  <div class="storage-notice" id="storage-notice">✓ Modèle sauvegardé</div>
+
+  <!-- Settings button -->
+  <div class="settings-btn" id="settings-btn" onclick="togglePanel()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </div>
+
+  <!-- Settings panel -->
+  <div class="settings-panel" id="settings-panel">
+
+    <div class="panel-label">Matériau</div>
+    <div class="ctrl-row">
+      <button class="ctrl-btn active" id="btn-original" onclick="setMaterial('original')">Original</button>
+      <button class="ctrl-btn" id="btn-glass"    onclick="setMaterial('glass')">Glass</button>
+    </div>
+    <div class="ctrl-row">
+      <button class="ctrl-btn" id="btn-wire"   onclick="setMaterial('wire')">Filaire</button>
+      <button class="ctrl-btn" id="btn-solid"  onclick="setMaterial('solid')">Solide</button>
+    </div>
+
+    <div class="panel-divider"></div>
+    <div class="panel-label">Rotation</div>
+    <div class="ctrl-row">
+      <button class="ctrl-btn active" id="rot-y"  onclick="setRotMode('y')">Y</button>
+      <button class="ctrl-btn" id="rot-x"         onclick="setRotMode('x')">X</button>
+      <button class="ctrl-btn" id="rot-xy"        onclick="setRotMode('xy')">X+Y</button>
+      <button class="ctrl-btn" id="rot-swing"     onclick="setRotMode('swing')">Swing</button>
+    </div>
+    <div class="ctrl-row">
+      <button class="ctrl-btn active" id="btn-auto" onclick="toggleAuto()">⟳ Auto</button>
+      <button class="ctrl-btn" onclick="resetCamera()">↺ Reset vue</button>
+    </div>
+
+    <div class="panel-divider"></div>
+    <div class="panel-label">Couleur des lumières</div>
+    <div class="color-row">
+      <div class="color-item">
+        <label>Principale</label>
+        <input type="color" id="color-main" value="#ffffff" oninput="updateLights()">
+      </div>
+      <div class="color-item">
+        <label>Secondaire</label>
+        <input type="color" id="color-sec" value="#a088ff" oninput="updateLights()">
+      </div>
+      <div class="color-item">
+        <label>Point</label>
+        <input type="color" id="color-pt" value="#88ccff" oninput="updateLights()">
+      </div>
+    </div>
+
+    <div class="panel-divider"></div>
+    <div class="panel-action" id="btn-clear" onclick="clearModel()">🗑 Supprimer le modèle</div>
+    <div class="panel-action" onclick="document.getElementById('file-input').click()">↑ Changer de modèle</div>
+  </div>
+
+  <input type="file" id="file-input" accept=".glb,.gltf,.obj" onchange="loadFile(this)">
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ── RENDERER ──────────────────────────────────────────────────────────────
+const canvas = document.getElementById('three-canvas');
+const wrap   = document.getElementById('viewer-wrap');
+
+const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+renderer.setSize(420, 420);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.3;
+renderer.setClearColor(0x000000, 0);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
+camera.position.set(0, 0, 3);
+
+const ambLight = new THREE.AmbientLight(0xffffff, 0.5); scene.add(ambLight);
+const dir1 = new THREE.DirectionalLight(0xffffff, 1.2); dir1.position.set(5,8,5);    scene.add(dir1);
+const dir2 = new THREE.DirectionalLight(0xa088ff, 0.7); dir2.position.set(-5,-3,-5); scene.add(dir2);
+const pt   = new THREE.PointLight(0x88ccff, 1.0, 20);   pt.position.set(2,3,4);      scene.add(pt);
+
+// ── STATE ─────────────────────────────────────────────────────────────────
+let currentModel = null, currentMat = 'original', rotMode = 'y';
+let autoRotate = true, panelOpen = false;
+let isDragging = false, prevMouse = {x:0,y:0};
+let autoTheta = 0, autoTime = 0;
+let spherical  = {theta:0, phi:Math.PI/2, radius:3};
+let targetSph  = {...spherical};
+const origMats = new WeakMap();
+
+// ── LIGHTS ────────────────────────────────────────────────────────────────
+function updateLights() {
+  dir1.color.set(document.getElementById('color-main').value);
+  dir2.color.set(document.getElementById('color-sec').value);
+  pt.color.set(document.getElementById('color-pt').value);
+  savePrefs();
+}
+
+// ── MATERIALS ─────────────────────────────────────────────────────────────
+function storeOrigMats(model) {
+  model.traverse(c => { if (c.isMesh) origMats.set(c, Array.isArray(c.material) ? [...c.material] : c.material); });
+}
+function glassMat()  { return new THREE.MeshPhysicalMaterial({color:0x88bbff,metalness:0.1,roughness:0.05,transparent:true,opacity:0.55,clearcoat:1,clearcoatRoughness:0,reflectivity:1,side:THREE.DoubleSide}); }
+function wireMat()   { return new THREE.MeshBasicMaterial({color:0xb09cff,wireframe:true,transparent:true,opacity:0.9}); }
+function solidMat()  { return new THREE.MeshStandardMaterial({color:0xccccee,metalness:0.4,roughness:0.3,side:THREE.DoubleSide}); }
+
+function applyMat(type) {
+  if (!currentModel) return;
+  if (type === 'original') {
+    currentModel.traverse(c => { if (c.isMesh && origMats.has(c)) c.material = origMats.get(c); });
+  } else {
+    const m = type==='glass' ? glassMat() : type==='wire' ? wireMat() : solidMat();
+    currentModel.traverse(c => { if (c.isMesh) c.material = m; });
+  }
+}
+function setMaterial(type) {
+  currentMat = type; applyMat(type);
+  ['original','glass','wire','solid'].forEach(t => { const el=document.getElementById('btn-'+t); if(el) el.classList.toggle('active',t===type); });
+  savePrefs();
+}
+
+// ── ROTATION MODES ────────────────────────────────────────────────────────
+function setRotMode(mode) {
+  rotMode = mode;
+  ['y','x','xy','swing'].forEach(m => document.getElementById('rot-'+m).classList.toggle('active', m===mode));
+  savePrefs();
+}
+
+// ── ORBIT ─────────────────────────────────────────────────────────────────
+canvas.addEventListener('mousedown', e => { isDragging=true; prevMouse={x:e.clientX,y:e.clientY}; });
+window.addEventListener('mouseup',   () => isDragging=false);
+window.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  targetSph.theta -= (e.clientX-prevMouse.x)*0.008;
+  targetSph.phi    = Math.max(0.1,Math.min(Math.PI-0.1, targetSph.phi+(e.clientY-prevMouse.y)*0.008));
+  prevMouse = {x:e.clientX,y:e.clientY};
+  if (autoRotate) { autoRotate=false; document.getElementById('btn-auto').classList.remove('active'); }
+});
+canvas.addEventListener('touchstart', e=>{ isDragging=true; prevMouse={x:e.touches[0].clientX,y:e.touches[0].clientY}; },{passive:true});
+window.addEventListener('touchend',   ()=>isDragging=false);
+window.addEventListener('touchmove',  e=>{
+  if (!isDragging) return;
+  targetSph.theta -= (e.touches[0].clientX-prevMouse.x)*0.008;
+  targetSph.phi    = Math.max(0.1,Math.min(Math.PI-0.1, targetSph.phi+(e.touches[0].clientY-prevMouse.y)*0.008));
+  prevMouse={x:e.touches[0].clientX,y:e.touches[0].clientY};
+  if (autoRotate) { autoRotate=false; document.getElementById('btn-auto').classList.remove('active'); }
+},{passive:true});
+canvas.addEventListener('wheel', e=>{
+  targetSph.radius = Math.max(0.5,Math.min(10, targetSph.radius+e.deltaY*0.005));
+},{passive:true});
+
+function resetCamera() { targetSph={theta:0,phi:Math.PI/2,radius:3}; }
+function toggleAuto()  {
+  autoRotate=!autoRotate;
+  document.getElementById('btn-auto').classList.toggle('active',autoRotate);
+  if (autoRotate) autoTheta = spherical.theta;
+  savePrefs();
+}
+
+// ── PANEL ─────────────────────────────────────────────────────────────────
+function togglePanel() {
+  panelOpen=!panelOpen;
+  document.getElementById('settings-panel').classList.toggle('open',panelOpen);
+}
+document.addEventListener('click', e=>{
+  if (panelOpen && !e.target.closest('#settings-panel') && !e.target.closest('#settings-btn')) {
+    panelOpen=false; document.getElementById('settings-panel').classList.remove('open');
+  }
+});
+
+// ── STORAGE : IndexedDB (supporte 100MB+) + localStorage pour les prefs ──
+const LS_PREFS  = '3dw_prefs';
+const IDB_NAME  = '3dviewer';
+const IDB_STORE = 'model';
+let db = null;
+
+// Ouvre (ou crée) la base IndexedDB
+function openDB() {
+  return new Promise((resolve, reject) => {
+    if (db) return resolve(db);
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore(IDB_STORE);
+    req.onsuccess = e => { db = e.target.result; resolve(db); };
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+// Sauvegarde le fichier brut (ArrayBuffer) dans IndexedDB
+function saveModel(arrayBuffer, name) {
+  openDB().then(db => {
+    const tx  = db.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    store.put({ buffer: arrayBuffer, name }, 'current');
+    tx.oncomplete = () => showNotice('✓ Modèle sauvegardé (' + (arrayBuffer.byteLength/1024/1024).toFixed(1) + ' MB)');
+    tx.onerror    = () => showNotice('⚠ Erreur de sauvegarde');
+  }).catch(() => showNotice('⚠ IndexedDB non disponible'));
+}
+
+// Charge le modèle depuis IndexedDB au démarrage
+function loadSavedModel() {
+  openDB().then(db => {
+    const tx    = db.transaction(IDB_STORE, 'readonly');
+    const store = tx.objectStore(IDB_STORE);
+    const req   = store.get('current');
+    req.onsuccess = e => {
+      const saved = e.target.result;
+      if (!saved) return;
+      document.getElementById('loader').classList.add('show');
+      const ext  = saved.name.split('.').pop().toLowerCase();
+      const blob = new Blob([saved.buffer]);
+      const url  = URL.createObjectURL(blob);
+      if (ext==='glb'||ext==='gltf') loadGLTF_url(url, saved.name, null);
+      else if (ext==='obj') {
+        saved.buffer.text ? saved.buffer.text().then(t => loadOBJ_text(t, saved.name, null))
+                          : new Response(blob).text().then(t => loadOBJ_text(t, saved.name, null));
+      }
+    };
+  }).catch(e => console.warn('IndexedDB indisponible', e));
+}
+
+function clearModel() {
+  openDB().then(db => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete('current');
+  }).catch(()=>{});
+  if (currentModel) { scene.remove(currentModel); currentModel=null; }
+  wrap.classList.remove('has-model');
+  document.getElementById('upload-zone').classList.remove('hidden');
+  panelOpen=false;
+  document.getElementById('settings-panel').classList.remove('open');
+  showNotice('🗑 Modèle supprimé');
+}
+
+// Prefs (petites données → localStorage OK)
+function savePrefs() {
+  try {
+    localStorage.setItem(LS_PREFS, JSON.stringify({
+      mat: currentMat, rotMode, autoRotate,
+      colorMain: document.getElementById('color-main').value,
+      colorSec:  document.getElementById('color-sec').value,
+      colorPt:   document.getElementById('color-pt').value,
+    }));
+  } catch(e) {}
+}
+
+function loadPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(LS_PREFS)||'{}');
+    if (p.rotMode)   setRotMode(p.rotMode);
+    if (p.colorMain) document.getElementById('color-main').value = p.colorMain;
+    if (p.colorSec)  document.getElementById('color-sec').value  = p.colorSec;
+    if (p.colorPt)   document.getElementById('color-pt').value   = p.colorPt;
+    updateLights();
+    if (p.autoRotate === false) { autoRotate=false; document.getElementById('btn-auto').classList.remove('active'); }
+    return p;
+  } catch(e) { return {}; }
+}
+
+function showNotice(msg) {
+  const n = document.getElementById('storage-notice');
+  n.textContent = msg;
+  n.classList.add('show');
+  setTimeout(()=>n.classList.remove('show'), 2500);
+}
+
+// ── FILE LOADING ──────────────────────────────────────────────────────────
+function loadFile(input) {
+  const file = input.files[0]; if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  document.getElementById('loader').classList.add('show');
+  const reader = new FileReader();
+  if (ext==='glb'||ext==='gltf') {
+    reader.onload = e => {
+      const buf = e.target.result;
+      const blob = new Blob([buf]);
+      const url  = URL.createObjectURL(blob);
+      loadGLTF_url(url, file.name, buf);
+    };
+    reader.readAsArrayBuffer(file);
+  } else if (ext==='obj') {
+    reader.onload = e => {
+      const buf  = e.target.result;
+      const text = new TextDecoder().decode(buf);
+      loadOBJ_text(text, file.name, buf);
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    document.getElementById('loader').classList.remove('show');
+    alert('Format non supporté : .glb, .gltf ou .obj');
+  }
+  input.value='';
+}
+
+function loadGLTF_url(url, name, bufferToSave) {
+  if (!THREE.GLTFLoader) {
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+    s.onload=()=>loadGLTF_url(url,name,bufferToSave); document.head.appendChild(s); return;
+  }
+  new THREE.GLTFLoader().load(url, gltf=>{
+    placeModel(gltf.scene, name);
+    if (bufferToSave) saveModel(bufferToSave, name);
+  }, undefined, err=>{ console.error(err); document.getElementById('loader').classList.remove('show'); });
+}
+
+function loadOBJ_text(text, name, bufferToSave) {
+  if (!THREE.OBJLoader) {
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js';
+    s.onload=()=>loadOBJ_text(text,name,bufferToSave); document.head.appendChild(s); return;
+  }
+  try {
+    placeModel(new THREE.OBJLoader().parse(text), name);
+    if (bufferToSave) saveModel(bufferToSave, name);
+  } catch(err) { console.error(err); document.getElementById('loader').classList.remove('show'); }
+}
+
+function placeModel(model, name) {
+  if (currentModel) scene.remove(currentModel);
+  const box    = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  const size   = box.getSize(new THREE.Vector3());
+  const scale  = 2.0 / Math.max(size.x,size.y,size.z);
+  model.position.copy(center.multiplyScalar(-scale));
+  model.scale.setScalar(scale);
+  scene.add(model);
+  currentModel = model;
+  storeOrigMats(model);
+
+  // Apply saved material pref or default to original
+  const prefs = JSON.parse(localStorage.getItem(LS_PREFS)||'{}');
+  setMaterial(prefs.mat || 'original');
+
+  document.getElementById('upload-zone').classList.add('hidden');
+  document.getElementById('loader').classList.remove('show');
+  wrap.classList.add('has-model');
+
+  targetSph  = {theta:0, phi:Math.PI/2, radius:3};
+  autoTheta  = 0;
+  autoRotate = true;
+  document.getElementById('btn-auto').classList.add('active');
+  panelOpen  = false;
+  document.getElementById('settings-panel').classList.remove('open');
+}
+
+// ── DRAG & DROP ───────────────────────────────────────────────────────────
+wrap.addEventListener('dragover',  e=>{ e.preventDefault(); wrap.classList.add('drag-over'); });
+wrap.addEventListener('dragleave', ()=>wrap.classList.remove('drag-over'));
+wrap.addEventListener('drop', e=>{
+  e.preventDefault(); wrap.classList.remove('drag-over');
+  const file=e.dataTransfer.files[0]; if(!file) return;
+  const dt=new DataTransfer(); dt.items.add(file);
+  const inp=document.getElementById('file-input'); inp.files=dt.files; loadFile(inp);
+});
+
+// ── RENDER LOOP ───────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+(function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+  autoTime += dt;
+
+  if (autoRotate && currentModel) {
+    switch(rotMode) {
+      case 'y':
+        autoTheta += dt * 0.4;
+        targetSph.theta = autoTheta;
+        break;
+      case 'x':
+        targetSph.phi = Math.PI/2 + Math.sin(autoTime*0.4)*0.8;
+        break;
+      case 'xy':
+        autoTheta += dt * 0.35;
+        targetSph.theta = autoTheta;
+        targetSph.phi   = Math.PI/2 + Math.sin(autoTime*0.25)*0.6;
+        break;
+      case 'swing':
+        targetSph.theta = Math.sin(autoTime*0.5)*1.2;
+        targetSph.phi   = Math.PI/2 + Math.sin(autoTime*0.3)*0.5;
+        break;
+    }
+  }
+
+  spherical.theta  += (targetSph.theta  - spherical.theta)  * 0.08;
+  spherical.phi    += (targetSph.phi    - spherical.phi)    * 0.08;
+  spherical.radius += (targetSph.radius - spherical.radius) * 0.08;
+
+  camera.position.set(
+    spherical.radius * Math.sin(spherical.phi) * Math.sin(spherical.theta),
+    spherical.radius * Math.cos(spherical.phi),
+    spherical.radius * Math.sin(spherical.phi) * Math.cos(spherical.theta)
+  );
+  camera.lookAt(0,0,0);
+
+  pt.position.x = Math.sin(Date.now()*0.001)*3;
+  pt.position.y = Math.cos(Date.now()*0.0007)*3;
+
+  renderer.render(scene, camera);
+})();
+
+// ── INIT ──────────────────────────────────────────────────────────────────
+loadPrefs();
+loadSavedModel();
+</script>
+</body>
+</html>
